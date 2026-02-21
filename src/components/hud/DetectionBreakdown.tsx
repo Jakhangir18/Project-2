@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import type { Detection } from '@/utils/nms';
 
 interface DetectionBreakdownProps {
@@ -6,7 +7,8 @@ interface DetectionBreakdownProps {
 }
 
 function classColor(classIndex: number): string {
-  return `hsl(${classIndex * 30}, 80%, 60%)`;
+  // Use a bright, saturated palette for dark mode visibility
+  return `hsl(${classIndex * 45}, 90%, 65%)`;
 }
 
 const DetectionBreakdown = ({ detections }: DetectionBreakdownProps) => {
@@ -24,23 +26,63 @@ const DetectionBreakdown = ({ detections }: DetectionBreakdownProps) => {
   }, [detections]);
 
   return (
-    <div className="flex flex-col gap-1">
-      <div className="flex items-center gap-2 mb-1">
-        <span className="font-syne font-extrabold text-3xl leading-none text-foreground">
+    <div className="flex flex-col gap-3 p-4 rounded-xl bg-background/30 backdrop-blur-xl border border-white/10 shadow-[0_8px_32px_rgba(0,0,0,0.4)] min-w-[160px] relative overflow-hidden group">
+      {/* Decorative top border glow */}
+      <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-white/20 to-transparent group-hover:via-white/40 transition-colors duration-500" />
+
+      <div className="flex items-center gap-3 mb-2">
+        <span className="font-syne font-extrabold text-4xl leading-none text-white drop-shadow-[0_0_12px_rgba(255,255,255,0.2)]">
           {detections.length}
         </span>
-        <span className="stats-text text-[9px] leading-tight">OBJECTS<br />DETECTED</span>
-      </div>
-      {breakdown.map(([name, { count, classIndex }]) => (
-        <div key={name} className="flex items-center gap-2 text-[10px] tracking-wider">
-          <span
-            className="w-2 h-2 rounded-full flex-shrink-0"
-            style={{ backgroundColor: classColor(classIndex) }}
-          />
-          <span className="text-foreground/70">{name}</span>
-          <span className="text-foreground/40">×{count}</span>
+        <div className="flex flex-col">
+          <span className="text-[9px] tracking-[0.2em] text-white/50 font-medium pt-1">OBJECTS</span>
+          <span className="text-[11px] tracking-[0.1em] text-white/90 font-bold">DETECTED</span>
         </div>
-      ))}
+      </div>
+
+      <div className="flex flex-col gap-2 relative">
+        <AnimatePresence mode="popLayout">
+          {breakdown.map(([name, { count, classIndex }]) => {
+            const color = classColor(classIndex);
+            return (
+              <motion.div
+                key={name}
+                layout
+                initial={{ opacity: 0, x: -10 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, scale: 0.9 }}
+                transition={{ duration: 0.2 }}
+                className="flex items-center justify-between group/item"
+              >
+                <div className="flex items-center gap-2">
+                  <span
+                    className="w-1.5 h-1.5 rounded-full flex-shrink-0"
+                    style={{
+                      backgroundColor: color,
+                      boxShadow: `0 0 8px ${color}`
+                    }}
+                  />
+                  <span className="text-xs font-medium text-white/70 group-hover/item:text-white transition-colors duration-300 capitalize drop-shadow-md">
+                    {name}
+                  </span>
+                </div>
+                <div className="flex items-center justify-center min-w-[24px] px-1.5 py-0.5 rounded text-xs font-bold text-white bg-white/5 border border-white/10 group-hover/item:bg-white/10 transition-colors duration-300">
+                  {count}
+                </div>
+              </motion.div>
+            );
+          })}
+        </AnimatePresence>
+
+        {breakdown.length === 0 && (
+          <motion.div
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+            className="text-[10px] text-white/30 italic mt-1 font-mono tracking-wider"
+          >
+            AWAITING TARGETS...
+          </motion.div>
+        )}
+      </div>
     </div>
   );
 };
