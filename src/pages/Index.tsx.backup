@@ -1,0 +1,470 @@
+import { useRef, useState, useCallback, useEffect, useMemo } from 'react';
+import { loadModel, preprocess, detect } from '../utils/detector';
+import { drawDetections } from '../utils/drawDetections';
+import type { Detection } from '../utils/nms';
+import FpsDisplay from '@/components/hud/FpsDisplay';
+import DetectionBreakdown from '@/components/hud/DetectionBreakdown';
+import RadarDisplay from '@/components/hud/RadarDisplay';
+import InferenceChart from '@/components/hud/InferenceChart';
+import StartupSequence from '@/components/hud/StartupSequence';
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { GlowingEffect } from "@/components/ui/glowing-effect";
+import { WebGLShader } from "@/components/ui/web-gl-shader";
+import { LiquidButton } from "@/components/ui/liquid-glass-button";
+import { SplineScene } from "@/components/ui/splite";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Spotlight } from "@/components/ui/spotlight";
+
+type AppState = 'idle' | 'loading' | 'startup' | 'running';
+
+const Index = () => {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const offscreenRef = useRef<HTMLCanvasElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const rafRef = useRef<number>(0);
+
+  const [state, setState] = useState<AppState>('idle');
+  const [loadProgress, setLoadProgress] = useState(0);
+  const [fps, setFps] = useState(0);
+  const [inferenceMs, setInferenceMs] = useState(0);
+  const [detections, setDetections] = useState<Detection[]>([]);
+  const [inferenceHistory, setInferenceHistory] = useState<number[]>([]);
+
+  const fpsFrames = useRef<number[]>([]);
+  const totalDetectionsRef = useRef<number>(0);
+  const lastUIUpdate = useRef<number>(0);
+  const UI_UPDATE_THROTTLE = 50;
+
+  const avgInference = useMemo(() => {
+    if (inferenceHistory.length === 0) return 0;
+    return Math.round(inferenceHistory.reduce((a, b) => a + b, 0) / inferenceHistory.length);
+  }, [inferenceHistory]);
+
+  const detectionConfidence = useMemo(() => {
+    if (detections.length === 0) return 0;
+    return Math.round((detections.reduce((sum, d) => sum + d.score, 0) / detections.length) * 100);
+  }, [detections]);
+
+  const stop = useCallback(() => {
+    cancelAnimationFrame(rafRef.current);
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(t => t.stop());
+      streamRef.current = null;
+    }
+    if (canvasRef.current) {
+      const ctx = canvasRef.current.getContext('2d');
+      ctx?.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+    }
+    setState('idle');
+    setFps(0);
+    setInferenceMs(0);
+    setDetections([]);
+    setInferenceHistory([]);
+    totalDetectionsRef.current = 0;
+  }, []);
+
+  const runDetectionLoop = useCallback(async () => {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    const offscreen = offscreenRef.current;
+    if (!video || !canvas || !offscreen || video.paused || video.ended) return;
+
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+    canvas.width = vw;
+    canvas.height = vh;
+    offscreen.width = vw;
+    offscreen.height = vh;
+
+    const offCtx = offscreen.getContext('2d')!;
+    const drawCtx = canvas.getContext('2d')!;
+
+    const loop = async () => {
+      if (!streamRef.current) return;
+
+      const frameStart = performance.now();
+      offCtx.drawImage(video, 0, 0, vw, vh);
+
+      try {
+        const tensor = preprocess(offCtx, vw, vh);
+        const result = await detect(tensor, vw, vh);
+        drawDetections(drawCtx, result.detections, vw, vh);
+        
+        const now = performance.now();
+        if (now - lastUIUpdate.current >= UI_UPDATE_THROTTLE) {
+          setInferenceMs(Math.round(result.inferenceMs));
+          setDetections(result.detections);
+          if (result.detections.length > 0) {
+            totalDetectionsRef.current += result.detections.length;
+          }
+          setInferenceHistory(prev => {
+            const next = [...prev, Math.round(result.inferenceMs)];
+            return next.slice(-10);
+          });
+          lastUIUpdate.current = now;
+        }
+      } catch (e) {
+        console.error('Detection error:', e);
+      }
+
+      const frameTime = performance.now() - frameStart;
+      fpsFrames.current.push(frameTime);
+      if (fpsFrames.current.length > 30) fpsFrames.current.shift();
+      const avgFrame = fpsFrames.current.reduce((a, b) => a + b, 0) / fpsFrames.current.length;
+      setFps(Math.round(1000 / avgFrame));
+
+      rafRef.current = requestAnimationFrame(loop);
+    };
+
+    rafRef.current = requestAnimationFrame(loop);
+  }, []);
+
+  const start = useCallback(async () => {
+    setState('loading');
+    try {
+      await loadModel((pct) => setLoadProgress(pct));
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } },
+      });
+      streamRef.current = stream;
+
+      const video = videoRef.current!;
+      video.srcObject = stream;
+      await video.play();
+
+      setState('startup');
+    } catch (e) {
+      console.error('Start error:', e);
+      setState('idle');
+    }
+  }, []);
+
+  const onStartupComplete = useCallback(() => {
+    setState('running');
+    runDetectionLoop();
+  }, [runDetectionLoop]);
+
+  useEffect(() => {
+    return () => {
+      cancelAnimationFrame(rafRef.current);
+      streamRef.current?.getTracks().forEach(t => t.stop());
+    };
+  }, []);
+
+  const videoWidth = videoRef.current?.videoWidth || 0;
+  const videoHeight = videoRef.current?.videoHeight || 0;
+
+  return (
+    <div className="min-h-screen bg-background text-foreground flex flex-col font-mono relative hud-perspective-grid hud-grid-bg overflow-hidden">
+      <div className="scanline-overlay" />
+
+      <header className="flex items-center justify-between px-6 py-4 border-b border-border/50 relative z-10 bg-black/20 backdrop-blur-md">
+        <div className="flex items-center gap-3">
+          <div className="relative flex items-center justify-center">
+            <span className="absolute w-8 h-8 rounded-full bg-cyan-500/20 animate-pulse"></span>
+            <span className="text-2xl">🎯</span>
+          </div>
+          <div className="flex flex-col">
+            <span className="text-foreground font-bold tracking-[0.3em] text-base uppercase bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 to-blue-500">SeeAI</span>
+            <span className="text-[8px] text-cyan-400/60 tracking-widest font-mono">NEURAL VISION</span>
+          </div>
+          {state === 'running' && (
+            <span className="w-2 h-2 rounded-full bg-cyan-400 pulse-dot ml-2 shadow-[0_0_10px_rgba(34,211,238,0.8)]" />
+          )}
+        </div>
+        <div className="flex items-center gap-4">
+          {state === 'running' && (
+            <>
+              <FpsDisplay fps={fps} />
+              <button
+                onClick={stop}
+                className="text-xs px-4 py-2 rounded-full bg-destructive/10 text-destructive hover:bg-destructive/20 transition-all duration-300 border border-destructive/30 tracking-wider uppercase font-mono hover:shadow-[0_0_15px_rgba(239,68,68,0.3)]"
+              >
+                Terminate
+              </button>
+            </>
+          )}
+        </div>
+      </header>
+
+      <main className="flex-1 flex items-center justify-center p-6 relative z-10">
+        {state === 'idle' && (
+          <div className="relative flex w-full flex-col items-center justify-center overflow-hidden">
+            <WebGLShader />
+            <div className="relative border border-[#27272a] p-2 w-full mx-auto max-w-3xl z-20">
+              <div className="relative border border-[#27272a] py-10 overflow-hidden bg-black/40 backdrop-blur-sm rounded-lg">
+                <h1 className="mb-3 text-white text-center text-5xl md:text-7xl font-extrabold tracking-tighter">
+                  Stealth Vision AI
+                </h1>
+                <p className="text-white/60 px-6 text-center text-xs md:text-sm lg:text-lg max-w-2xl mx-auto">
+                  Advanced real-time object detection powered by YOLOv8. Unleashing AI perception through cutting-edge neural networks.
+                </p>
+                <div className="my-8 flex items-center justify-center gap-2">
+                  <span className="relative flex h-3 w-3 items-center justify-center">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-cyan-500 opacity-75"></span>
+                    <span className="relative inline-flex h-2 w-2 rounded-full bg-cyan-500"></span>
+                  </span>
+                  <p className="text-xs text-cyan-400 font-mono tracking-wider">SYSTEM READY</p>
+                </div>
+                
+                <div className="flex justify-center">
+                  <LiquidButton 
+                    onClick={start}
+                    className="text-white border border-white/20 rounded-full font-mono tracking-wider hover:border-cyan-400/50 transition-all" 
+                    size={'xl'}
+                  >
+                    Initialize Detection
+                  </LiquidButton>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {state === 'loading' && (
+          <div className="animate-fade-in flex flex-col items-center gap-4">
+            <div className="w-10 h-10 border-2 border-border border-t-primary rounded-full animate-spin-slow" />
+            <p className="text-muted-foreground text-xs tracking-wider uppercase">Loading AI model (6MB)...</p>
+            <div className="w-48 h-1 bg-secondary rounded-full overflow-hidden">
+              <div
+                className="h-full bg-primary transition-all duration-300 rounded-full"
+                style={{ width: `${loadProgress}%` }}
+              />
+            </div>
+            <span className="text-primary text-xs font-syne font-bold">{loadProgress}%</span>
+          </div>
+        )}
+
+        {state === 'startup' && (
+          <div className="animate-fade-in">
+            <StartupSequence loadProgress={loadProgress} onComplete={onStartupComplete} />
+          </div>
+        )}
+
+        <div className={`w-full max-w-[95rem] flex flex-col gap-6 ${(state === 'running' || state === 'startup') ? 'flex' : 'hidden'
+          }`}>
+            <div className="relative">
+              <GlowingEffect
+                spread={50}
+                glow={true}
+                disabled={false}
+                proximity={100}
+                inactiveZone={0.01}
+                borderWidth={2}
+              />
+              <div
+                className={`video-frame relative w-full rounded-xl overflow-hidden border border-cyan-500/30 shadow-[0_0_30px_rgba(6,182,212,0.15)] ${state === 'running' ? 'animate-fade-in' :
+                  state === 'startup' ? 'opacity-0' : 'hidden'
+                  }`}
+                style={{ willChange: 'transform', contain: 'layout style paint' }}
+              >
+                <video ref={videoRef} className="w-full block" playsInline muted style={{ willChange: 'transform' }} />
+                <canvas ref={canvasRef} className="absolute inset-0 w-full h-full pointer-events-none" style={{ willChange: 'transform' }} />
+
+                {state === 'running' && (
+                  <div className="absolute top-4 right-4 z-10 flex gap-2">
+                    <span className="px-3 py-1.5 bg-black/70 border border-cyan-400/40 rounded-full text-[10px] uppercase font-bold text-cyan-400 backdrop-blur-md font-mono tracking-wider shadow-[0_0_15px_rgba(34,211,238,0.3)]">
+                      <span className="inline-block w-1.5 h-1.5 bg-cyan-400 rounded-full mr-2 animate-pulse"></span>
+                      Live Feed
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {state === 'running' && (
+              <>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 animate-fade-in">
+                  <Card className="relative bg-background/95 backdrop-blur-md border-border overflow-hidden">
+                    <GlowingEffect spread={40} glow={true} disabled={false} proximity={80} inactiveZone={0.01} borderWidth={2} />
+                    <CardContent className="p-4">
+                      <div className="flex items-center gap-3 mb-2">
+                        <div className="p-2 rounded-lg bg-cyan-500/10 border border-cyan-500/20">
+                          <Target className="h-4 w-4 text-cyan-400" />
+                        </div>
+                        <span className="text-xs uppercase tracking-wider text-muted-foreground font-mono">Live Objects</span>
+                      </div>
+                      <div className="text-3xl font-bold text-foreground">{detections.length}</div>
+                      <p className="text-xs text-muted-foreground mt-1">Active detections</p>
+                    </CardContent>
+                  </Card>
+
+                  <Card className="relative bg-background/95 backdrop-blur-md border-border overflow-hidden">
+                    <GlowingEffect spread={40} glow={true} disabled={false} proximity={80} inactiveZone={0.01} borderWidth={2} />
+                    <CardContent className="p-4">
+                      <div className="flex items-center gap-3 mb-2">
+                        <div className="p-2 rounded-lg bg-purple-500/10 border border-purple-500/20">
+                          <Cpu className="h-4 w-4 text-purple-400" />
+                        </div>
+                        <span className="text-xs uppercase tracking-wider text-muted-foreground font-mono">Avg Inference</span>
+                      </div>
+                      <div className="text-3xl font-bold text-foreground">{avgInference}<span className="text-lg text-muted-foreground">ms</span></div>
+                      <p className="text-xs text-muted-foreground mt-1">Processing time</p>
+                    </CardContent>
+                  </Card>
+
+                  <Card className="relative bg-background/95 backdrop-blur-md border-border overflow-hidden">
+                    <GlowingEffect spread={40} glow={true} disabled={false} proximity={80} inactiveZone={0.01} borderWidth={2} />
+                    <CardContent className="p-4">
+                      <div className="flex items-center gap-3 mb-2">
+                        <div className="p-2 rounded-lg bg-green-500/10 border border-green-500/20">
+                          <TrendingUp className="h-4 w-4 text-green-400" />
+                        </div>
+                        <span className="text-xs uppercase tracking-wider text-muted-foreground font-mono">Confidence</span>
+                      </div>
+                      <div className="text-3xl font-bold text-foreground">{detectionConfidence}<span className="text-lg text-muted-foreground">%</span></div>
+                      <p className="text-xs text-muted-foreground mt-1">Avg accuracy</p>
+                    </CardContent>
+                  </Card>
+
+                  <Card className="relative bg-background/95 backdrop-blur-md border-border overflow-hidden">
+                    <GlowingEffect spread={40} glow={true} disabled={false} proximity={80} inactiveZone={0.01} borderWidth={2} />
+                    <CardContent className="p-4">
+                      <div className="flex items-center gap-3 mb-2">
+                        <div className="p-2 rounded-lg bg-orange-500/10 border border-orange-500/20">
+                          <Activity className="h-4 w-4 text-orange-400" />
+                        </div>
+                        <span className="text-xs uppercase tracking-wider text-muted-foreground font-mono">Total Detected</span>
+                      </div>
+                      <div className="text-3xl font-bold text-foreground">{totalDetectionsRef.current}</div>
+                      <p className="text-xs text-muted-foreground mt-1">All time count</p>
+                    </CardContent>
+                  </Card>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 animate-fade-in">
+                  <Card className="relative bg-background/95 backdrop-blur-md border-border overflow-hidden h-full">
+                    <GlowingEffect spread={40} glow={true} disabled={false} proximity={80} inactiveZone={0.01} borderWidth={2} />
+                    <CardHeader className="p-4 pb-2">
+                      <CardTitle className="text-xs uppercase tracking-wider text-muted-foreground font-mono flex items-center gap-2">
+                        <Eye className="h-3 w-3 text-primary" />
+                        Detection Breakdown
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="p-4 pt-0">
+                      <DetectionBreakdown detections={detections} />
+                    </CardContent>
+                  </Card>
+
+                  <Card className="relative bg-background/95 backdrop-blur-md border-border overflow-hidden h-full">
+                    <GlowingEffect spread={40} glow={true} disabled={false} proximity={80} inactiveZone={0.01} borderWidth={2} />
+                    <CardHeader className="p-4 pb-2">
+                      <CardTitle className="text-xs uppercase tracking-wider text-muted-foreground font-mono flex items-center gap-2">
+                        <Zap className="h-3 w-3 text-primary" />
+                        Inference Timeline
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="p-4 pt-0 flex justify-center items-center h-[120px]">
+                      <InferenceChart inferenceMs={inferenceMs} history={inferenceHistory} />
+                    </CardContent>
+                  </Card>
+
+                  <Card className="relative bg-background/95 backdrop-blur-md border-border overflow-hidden h-full">
+                    <GlowingEffect spread={40} glow={true} disabled={false} proximity={80} inactiveZone={0.01} borderWidth={2} />
+                    <CardHeader className="p-4 pb-2">
+                      <CardTitle className="text-xs uppercase tracking-wider text-muted-foreground font-mono flex items-center gap-2">
+                        <Target className="h-3 w-3 text-primary" />
+                        Spatial Radar
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="p-4 pt-0 w-full flex justify-center items-center h-[120px] overflow-visible">
+                      <RadarDisplay detections={detections} videoWidth={videoWidth} videoHeight={videoHeight} />
+                    </CardContent>
+                  </Card>
+                </div>
+              </>
+            )}
+
+            {state === 'running' && (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 animate-fade-in">
+                {/* Audio Visualizer */}
+                <Card className="relative bg-background/95 backdrop-blur-md border-border overflow-hidden">
+                  <GlowingEffect spread={40} glow={true} disabled={false} proximity={80} inactiveZone={0.01} borderWidth={2} />
+                  <CardHeader className="p-4 pb-2">
+                    <CardTitle className="text-xs uppercase tracking-wider text-muted-foreground font-mono flex items-center gap-2">
+                      <Camera className="h-3 w-3 text-primary" />
+                      Detection Frequency
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="p-4 pt-0">
+                    <BarVisualizer 
+                      state="speaking" 
+                      demo={true} 
+                      barCount={15} 
+                      minHeight={15} 
+                      maxHeight={90}
+                      className="h-32 bg-transparent border-0"
+                    />
+                  </CardContent>
+                </Card>
+
+                {/* AI Detection Dashboard */}
+                <Card className="relative bg-background/95 backdrop-blur-md border-border overflow-hidden">
+                  <GlowingEffect spread={40} glow={true} disabled={false} proximity={80} inactiveZone={0.01} borderWidth={2} />
+                  <CardContent className="p-4">
+                    <MarketingDashboard
+                      title="AI Detection Stats"
+                      teamActivities={{
+                        totalHours: parseFloat((totalDetectionsRef.current / 10).toFixed(1)),
+                        stats: [
+                          { label: "High", value: detectionConfidence > 70 ? 50 : 25, color: "bg-green-400" },
+                          { label: "Med", value: 30, color: "bg-yellow-400" },
+                          { label: "Low", value: detectionConfidence < 30 ? 40 : 20, color: "bg-orange-400" },
+                        ],
+                      }}
+                      team={{
+                        memberCount: totalDetectionsRef.current,
+                        members: [
+                          { id: "1", name: "Object", avatarUrl: "https://api.dicebear.com/7.x/shapes/svg?seed=object1" },
+                          { id: "2", name: "Target", avatarUrl: "https://api.dicebear.com/7.x/shapes/svg?seed=target2" },
+                          { id: "3", name: "Entity", avatarUrl: "https://api.dicebear.com/7.x/shapes/svg?seed=entity3" },
+                          { id: "4", name: "Item", avatarUrl: "https://api.dicebear.com/7.x/shapes/svg?seed=item4" },
+                        ],
+                      }}
+                      cta={{
+                        text: `${detections.length} objects detected in real-time`,
+                        buttonText: "View All",
+                        onButtonClick: () => console.log("View all detections"),
+                      }}
+                      className="bg-transparent border-0 p-0 shadow-none"
+                    />
+                  </CardContent>
+                </Card>
+              </div>
+            )}
+        </div>
+      </main>
+
+      <canvas ref={offscreenRef} className="hidden" />
+
+      {state === 'running' && (
+        <footer className="flex items-center justify-center gap-8 px-6 py-4 border-t border-border/50 animate-fade-in relative z-10 bg-black/20 backdrop-blur-md">
+          <div className="stats-text lg:hidden flex items-center gap-2">
+            <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse"></span>
+            <span className="font-mono text-cyan-400/80">Objects:</span>
+            <span className="font-bold text-cyan-300">{detections.length}</span>
+          </div>
+          <div className="stats-text flex items-center gap-2">
+            <span className="w-1.5 h-1.5 rounded-full bg-purple-400 animate-pulse"></span>
+            <span className="font-mono text-purple-400/80">Inference:</span>
+            <span className="font-bold text-purple-300">{inferenceMs}ms</span>
+          </div>
+          <div className="stats-text flex items-center gap-2">
+            <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse"></span>
+            <span className="font-mono text-green-400/80">Model:</span>
+            <span className="font-bold text-green-300">YOLOv8n</span>
+          </div>
+          <div className="stats-text hidden sm:flex items-center gap-2">
+            <span className="w-1.5 h-1.5 rounded-full bg-orange-400 animate-pulse"></span>
+            <span className="font-mono text-orange-400/80">Backend:</span>
+            <span className="font-bold text-orange-300">WASM</span>
+          </div>
+        </footer>
+      )}
+    </div>
+  );
+};
+
+export default Index;
