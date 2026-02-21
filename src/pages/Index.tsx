@@ -7,6 +7,10 @@ import DetectionBreakdown from '@/components/hud/DetectionBreakdown';
 import RadarDisplay from '@/components/hud/RadarDisplay';
 import InferenceChart from '@/components/hud/InferenceChart';
 import StartupSequence from '@/components/hud/StartupSequence';
+import SystemMetrics from '@/components/hud/SystemMetrics';
+import EventLog from '@/components/hud/EventLog';
+import { WebGLShader } from '@/components/ui/web-gl-shader';
+import { LiquidButton } from '@/components/ui/liquid-glass-button';
 
 type AppState = 'idle' | 'loading' | 'startup' | 'running';
 
@@ -128,7 +132,7 @@ const Index = () => {
   const videoHeight = videoRef.current?.videoHeight || 0;
 
   return (
-    <div className="min-h-screen bg-background text-foreground flex flex-col font-mono relative hud-perspective-grid hud-grid-bg overflow-hidden">
+    <div className={`min-h-screen text-foreground flex flex-col font-mono relative hud-perspective-grid hud-grid-bg overflow-hidden ${state === 'idle' ? 'bg-transparent' : 'bg-background'}`}>
       {/* Scanline overlay */}
       <div className="scanline-overlay" />
 
@@ -157,15 +161,38 @@ const Index = () => {
       </header>
 
       {/* Main content */}
-      <main className="flex-1 flex items-center justify-center p-6 relative z-10">
+      <main className={`flex-1 flex p-6 relative z-10 w-full max-w-[1920px] mx-auto overflow-hidden ${state === 'idle' ? 'items-center justify-center' : 'items-stretch gap-8'}`}>
         {state === 'idle' && (
-          <button
-            onClick={start}
-            className="animate-fade-in group flex items-center gap-3 px-8 py-4 rounded-lg bg-secondary hover:bg-secondary/80 border border-border hover:border-primary/30 transition-all duration-300"
-          >
-            <span className="text-foreground text-sm tracking-wider uppercase">Start Detection</span>
-            <span className="text-primary group-hover:translate-x-1 transition-transform">→</span>
-          </button>
+          <div className="relative flex w-full flex-col items-center justify-center overflow-hidden animate-fade-in w-full h-full">
+            <WebGLShader />
+            <div className="relative border border-white/10 bg-background/20 backdrop-blur-sm p-2 w-full mx-auto max-w-3xl rounded-xl">
+              <div className="relative border border-white/10 py-16 overflow-hidden rounded-lg">
+                <h1 className="mb-3 text-white text-center text-6xl font-extrabold tracking-tighter md:text-[clamp(2rem,8vw,5rem)] font-syne uppercase">
+                  SeeAI Vision
+                </h1>
+                <p className="text-white/60 px-6 text-center text-xs md:text-sm lg:text-lg mb-8 max-w-xl mx-auto">
+                  Initializing neural network protocols for real-time objective tracking and environmental analysis. Standby for link start.
+                </p>
+                <div className="my-8 flex items-center justify-center gap-2">
+                  <span className="relative flex h-3 w-3 items-center justify-center">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-75"></span>
+                    <span className="relative inline-flex h-2 w-2 rounded-full bg-primary"></span>
+                  </span>
+                  <p className="text-xs text-primary uppercase tracking-wider font-bold">System Online & Ready</p>
+                </div>
+
+                <div className="flex justify-center mt-8">
+                  <LiquidButton
+                    className="text-white border-white/20 rounded-full bg-white/5 hover:bg-white/10 px-12 uppercase tracking-widest text-xs font-bold"
+                    size={'xl'}
+                    onClick={start}
+                  >
+                    Initiate Link
+                  </LiquidButton>
+                </div>
+              </div>
+            </div>
+          </div>
         )}
 
         {state === 'loading' && (
@@ -189,14 +216,16 @@ const Index = () => {
         )}
 
         {(state === 'running' || state === 'startup') && (
-          <div className="flex gap-6 items-start max-w-4xl w-full">
+          <div className="flex gap-6 items-start shrink-0">
             {state === 'running' && (
-              <div className="hidden lg:flex flex-col gap-4 animate-fade-in min-w-[140px]">
+              <div className="hidden lg:flex flex-col gap-4 animate-fade-in w-[240px]">
                 <DetectionBreakdown detections={detections} />
+                <SystemMetrics videoWidth={videoWidth} videoHeight={videoHeight} fps={fps} />
+                <EventLog detections={detections} />
               </div>
             )}
             {state === 'running' && (
-              <div className="hidden lg:flex flex-col gap-4 items-center animate-fade-in min-w-[130px]">
+              <div className="hidden lg:flex flex-col gap-4 items-center animate-fade-in w-[180px]">
                 <InferenceChart inferenceMs={inferenceMs} history={inferenceHistory} />
                 <RadarDisplay detections={detections} videoWidth={videoWidth} videoHeight={videoHeight} />
               </div>
@@ -206,12 +235,11 @@ const Index = () => {
 
         {/* Video always in DOM so ref is available */}
         <div
-          className={`video-frame hud-glow relative w-full max-w-2xl ${
-            state === 'running' ? 'animate-fade-in' :
+          className={`video-frame hud-glow relative flex-1 h-full min-h-[500px] w-full rounded-2xl overflow-hidden border border-white/5 bg-black/40 backdrop-blur-sm ${state === 'running' ? 'animate-fade-in flex items-center justify-center' :
             state === 'startup' ? 'opacity-0' : 'hidden'
-          }`}
+            }`}
         >
-          <video ref={videoRef} className="w-full block rounded-lg" playsInline muted />
+          <video ref={videoRef} className="w-full h-full object-contain" playsInline muted />
           <canvas ref={canvasRef} className="absolute inset-0 w-full h-full pointer-events-none" />
         </div>
       </main>
