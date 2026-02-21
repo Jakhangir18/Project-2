@@ -1,0 +1,208 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@400;600;700;800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 220 67% 2%;
+    --foreground: 210 20% 90%;
+
+    --card: 220 50% 4%;
+    --card-foreground: 210 20% 90%;
+
+    --popover: 220 50% 4%;
+    --popover-foreground: 210 20% 90%;
+
+    --primary: 160 100% 50%;
+    --primary-foreground: 220 67% 2%;
+
+    --secondary: 220 30% 8%;
+    --secondary-foreground: 210 20% 70%;
+
+    --muted: 220 20% 7%;
+    --muted-foreground: 215 15% 35%;
+
+    --accent: 190 80% 50%;
+    --accent-foreground: 220 67% 2%;
+
+    --destructive: 0 80% 55%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 220 30% 10%;
+    --input: 220 30% 10%;
+    --ring: 160 100% 50%;
+
+    --radius: 0.5rem;
+
+    /* SeeAI HUD tokens */
+    --hud-glow: 160 100% 50%;
+    --hud-border: 220 30% 12%;
+    --hud-cyan: 190 100% 50%;
+    --hud-amber: 40 100% 55%;
+    --hud-red: 0 100% 55%;
+    --stats-text: 215 20% 35%;
+    --grid-color: 200 100% 55%;
+    --radar-green: 140 100% 45%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'DM Mono', monospace;
+  }
+}
+
+@layer utilities {
+  /* Perspective grid background */
+  .hud-grid-bg {
+    background-image:
+      linear-gradient(hsl(var(--grid-color) / 0.04) 1px, transparent 1px),
+      linear-gradient(90deg, hsl(var(--grid-color) / 0.04) 1px, transparent 1px);
+    background-size: 40px 40px;
+    background-position: center;
+  }
+
+  .hud-perspective-grid::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background:
+      linear-gradient(180deg, transparent 40%, hsl(var(--grid-color) / 0.03) 100%),
+      repeating-linear-gradient(
+        90deg,
+        transparent,
+        transparent 79px,
+        hsl(var(--grid-color) / 0.03) 79px,
+        hsl(var(--grid-color) / 0.03) 80px
+      );
+    transform: perspective(500px) rotateX(30deg);
+    transform-origin: center bottom;
+    pointer-events: none;
+    z-index: 0;
+    mask-image: linear-gradient(to top, rgba(0,0,0,0.5), transparent 60%);
+    -webkit-mask-image: linear-gradient(to top, rgba(0,0,0,0.5), transparent 60%);
+  }
+
+  /* Scanline overlay */
+  .scanline-overlay {
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0, 0, 0, 0.06) 2px,
+      rgba(0, 0, 0, 0.06) 3px
+    );
+    pointer-events: none;
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+  }
+
+  .hud-glow {
+    box-shadow: 0 0 40px -5px hsl(var(--hud-glow) / 0.12),
+                inset 0 0 40px -10px hsl(var(--hud-glow) / 0.04);
+  }
+
+  .hud-border {
+    border: 1px solid hsl(var(--hud-border));
+  }
+
+  .video-frame {
+    border-radius: 8px;
+    border: 1px solid hsl(var(--hud-glow) / 0.15);
+    overflow: hidden;
+    position: relative;
+  }
+
+  .stats-text {
+    color: hsl(var(--stats-text));
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  /* Typewriter cursor */
+  .typewriter-cursor::after {
+    content: '█';
+    animation: blink-cursor 0.8s step-end infinite;
+    color: hsl(var(--hud-glow));
+  }
+
+  @keyframes blink-cursor {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+  }
+
+  .pulse-dot {
+    animation: pulse-glow 2s ease-in-out infinite;
+  }
+
+  @keyframes pulse-glow {
+    0%, 100% { opacity: 0.4; }
+    50% { opacity: 1; }
+  }
+
+  @keyframes fade-in {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .animate-fade-in {
+    animation: fade-in 0.5s ease-out forwards;
+  }
+
+  @keyframes fade-in-up {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .animate-fade-in-up {
+    animation: fade-in-up 0.6s ease-out forwards;
+  }
+
+  @keyframes spin-slow {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+
+  .animate-spin-slow {
+    animation: spin-slow 2s linear infinite;
+  }
+
+  /* Radar sweep */
+  @keyframes radar-sweep {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+
+  .animate-radar-sweep {
+    animation: radar-sweep 2.5s linear infinite;
+  }
+
+  /* Float up and fade */
+  @keyframes float-up-fade {
+    0% { opacity: 1; transform: translateY(0); }
+    100% { opacity: 0; transform: translateY(-30px); }
+  }
+
+  .animate-float-up {
+    animation: float-up-fade 0.8s ease-out forwards;
+  }
+
+  /* Flash border */
+  @keyframes flash-border {
+    0% { opacity: 1; }
+    100% { opacity: 0; }
+  }
+
+  .font-syne {
+    font-family: 'Syne', sans-serif;
+  }
+}
